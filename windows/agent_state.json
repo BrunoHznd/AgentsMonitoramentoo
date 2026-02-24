@@ -1,0 +1,23 @@
+{
+  "agent_id": "acc38183-0989-4d33-99b9-114b241b3377",
+  "last_inet_speedtest_at": 1770915368.4653926,
+  "last_inet_speedtest": {
+    "inet_download_mbps": 156.86,
+    "inet_upload_mbps": 84.89,
+    "inet_ping_ms": 69.39,
+    "inet_isp": "Desktop Sigmanet Comunicacao Multimidia SA",
+    "inet_server_name": "THS Provider",
+    "inet_error": null
+  },
+  "last_speedtest_at": 1770915530.8760657,
+  "last_speedtest": {
+    "download_mbps": 4.06,
+    "upload_mbps": 2.07,
+    "download_error": null,
+    "upload_error": null,
+    "download_seconds": 2.067,
+    "upload_seconds": 2.03,
+    "download_bytes": 1048576,
+    "upload_bytes": 524288
+  }
+}
