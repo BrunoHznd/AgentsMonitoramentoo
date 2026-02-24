@@ -1,8 +1,8 @@
 {
-  "site": "galpao",
-  "server": "http://localhost:9000",
+  "site": "site-exemplo",
+  "server": "http://85.31.63.53/",
   "token": "",
-  "interval_sec": 60,
+  "interval_sec": 5,
   "loop": true,
   "cameras": []
 }
