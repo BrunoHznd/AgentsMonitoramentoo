@@ -75,10 +75,26 @@ def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) ->
     rtsp_url = f"rtsp://admin:{nvr_password}@{ip}:554/cam/realmonitor?channel=1&subtype=0"
     
     # Tentar com VLC (cvlc = VLC sem interface)
-    vlc_commands = [
-        ["cvlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
-        ["vlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
-    ]
+    # No Windows, VLC pode estar em caminhos específicos
+    is_windows = platform.system().lower().startswith("win")
+    
+    vlc_commands = []
+    
+    if is_windows:
+        # Caminhos comuns do VLC no Windows
+        possible_paths = [
+            r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+            r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+            "vlc",  # Tentar no PATH também
+        ]
+        for vlc_path in possible_paths:
+            vlc_commands.append([vlc_path, rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"])
+    else:
+        # Linux: tentar cvlc primeiro (sem interface), depois vlc
+        vlc_commands = [
+            ["cvlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
+            ["vlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
+        ]
     
     for cmd in vlc_commands:
         try:
