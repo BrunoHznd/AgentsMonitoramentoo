@@ -52,7 +52,81 @@ def load_agent_config() -> Dict[str, Any]:
     }
 
 
-def ping_ip(ip: str, count: int = 4, timeout_ms: int = 1000, retry: int = 2) -> Tuple[bool, Optional[float], Optional[float], str]:
+def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) -> Tuple[bool, Optional[str]]:
+    """
+    Testa se consegue obter stream RTSP da câmera via NVR usando VLC.
+    
+    Args:
+        ip: IP da câmera/NVR
+        nvr_password: Senha do NVR
+        timeout_sec: Timeout em segundos
+    
+    Returns:
+        (success, error_message)
+        - success: True se conseguiu stream, False caso contrário
+        - error_message: Mensagem de erro ou None se sucesso
+    """
+    import re as _re
+    
+    # URL RTSP padrão para NVRs (ajustar conforme seu modelo)
+    # Formatos comuns:
+    # rtsp://admin:senha@IP:554/cam/realmonitor?channel=1&subtype=0
+    # rtsp://admin:senha@IP:554/h264/ch1/main/av_stream
+    rtsp_url = f"rtsp://admin:{nvr_password}@{ip}:554/cam/realmonitor?channel=1&subtype=0"
+    
+    # Tentar com VLC (cvlc = VLC sem interface)
+    vlc_commands = [
+        ["cvlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
+        ["vlc", rtsp_url, "--run-time=3", "--no-video-title-show", "--quiet", "--no-audio", "--vout=dummy", "vlc://quit"],
+    ]
+    
+    for cmd in vlc_commands:
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec
+            )
+            
+            output = (proc.stdout or "") + (proc.stderr or "")
+            
+            # VLC retorna 0 se conseguiu abrir o stream
+            # Verificar também por mensagens de erro conhecidas
+            error_patterns = [
+                r"connection failed",
+                r"cannot connect",
+                r"401 unauthorized",
+                r"404 not found",
+                r"timeout",
+                r"no suitable decoder",
+            ]
+            
+            has_error = any(_re.search(pattern, output, _re.IGNORECASE) for pattern in error_patterns)
+            
+            if proc.returncode == 0 and not has_error:
+                return True, None
+            elif has_error:
+                # Extrair mensagem de erro
+                for line in output.splitlines():
+                    for pattern in error_patterns:
+                        if _re.search(pattern, line, _re.IGNORECASE):
+                            return False, line.strip()[:200]
+                return False, "Stream error detected"
+            
+        except subprocess.TimeoutExpired:
+            return False, f"Timeout após {timeout_sec}s"
+        except FileNotFoundError:
+            # VLC não encontrado, tentar próximo comando
+            continue
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+    
+    # Se chegou aqui, VLC não está instalado
+    return False, "VLC not installed. Install with: apt install vlc (Linux) or download from videolan.org (Windows)"
+
+
+def ping_ip(ip: str, count: int = 6, timeout_ms: int = 3000, retry: int = 3) -> Tuple[bool, Optional[float], Optional[float], str]:
     """
     Retorna: (reachable, avg_latency_ms, packet_loss_percent, raw_output_tail)
     
@@ -60,6 +134,9 @@ def ping_ip(ip: str, count: int = 4, timeout_ms: int = 1000, retry: int = 2) -> 
     - Retry automático em caso de falha (reduz falsos negativos)
     - Validação de latência suspeita (detecta falsos positivos)
     - Melhor parsing de output em diferentes idiomas
+    - Timeout aumentado para 3000ms para câmeras Yoosee que demoram mais
+    - 6 pings por tentativa para maior confiabilidade
+    - 3 tentativas de retry para reduzir falsos negativos
     """
     import re as _re
     
@@ -67,15 +144,16 @@ def ping_ip(ip: str, count: int = 4, timeout_ms: int = 1000, retry: int = 2) -> 
     if is_windows:
         cmd = ["ping", "-n", str(count), "-w", str(timeout_ms), ip]
     else:
-        # -W 1 (segundos no Linux), -c count
-        cmd = ["ping", "-c", str(count), "-W", "1", ip]
+        # -W 3 (segundos no Linux), -c count - aumentado para 3s para câmeras Yoosee
+        cmd = ["ping", "-c", str(count), "-W", "3", ip]
     
     last_error = None
     
     # Tentar até 'retry' vezes para reduzir falsos negativos
     for attempt in range(retry):
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=max(3, count * 2))
+            # Timeout aumentado para acomodar 6 pings de 3s cada = ~20s
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
             output = (proc.stdout or "") + (proc.stderr or "")
             reachable = proc.returncode == 0
             avg_ms: Optional[float] = None
@@ -116,9 +194,15 @@ def ping_ip(ip: str, count: int = 4, timeout_ms: int = 1000, retry: int = 2) -> 
                             pass
             
             # Validação: detectar falsos positivos
-            # Se returncode = 0 mas perda = 100%, considerar offline
+            # Se returncode = 0 mas perda >= 100%, considerar offline
+            # Câmeras Yoosee podem ter até 50% de perda e ainda estarem funcionais
             if reachable and loss_pct is not None and loss_pct >= 100.0:
                 reachable = False
+            
+            # Se teve pelo menos uma resposta (perda < 100%), considerar online
+            # mesmo que returncode != 0, pois câmeras Yoosee podem ser lentas
+            if not reachable and loss_pct is not None and loss_pct < 100.0:
+                reachable = True
             
             # Se returncode = 0 mas não conseguiu extrair latência, pode ser falso positivo
             # Verificar se há pelo menos uma resposta bem-sucedida no output
@@ -141,14 +225,14 @@ def ping_ip(ip: str, count: int = 4, timeout_ms: int = 1000, retry: int = 2) -> 
             # Se falhou mas ainda há tentativas, continuar
             last_error = output[-500:]
             
-            # Pequeno delay antes de retry (100ms)
+            # Delay antes de retry (500ms) - aumentado para câmeras Yoosee
             if attempt < retry - 1:
-                time.sleep(0.1)
+                time.sleep(0.5)
                 
         except Exception as e:
             last_error = f"ping error: {e}"
             if attempt < retry - 1:
-                time.sleep(0.1)
+                time.sleep(0.5)
             continue
     
     # Todas as tentativas falharam
@@ -849,92 +933,38 @@ def run_once(cfg: Dict[str, Any]) -> None:
     elif isinstance(last_st, dict):
         net.update(last_st)
 
-    # 3) Pingar cameras com retry, validação melhorada e rastreamento por MAC
+    # 3) Testar câmeras via NVR usando VLC
     cam_reports: List[Dict[str, Any]] = []
-    mac_tracking_enabled = os.getenv("AGENT_MAC_TRACKING", "1").strip().lower() in ("1", "true", "yes")
-    mac_cache = state.get("camera_mac_cache", {})
-    mac_cache_updated = False
     
     for c in cameras:
         ip = c.get("ip")
         name = c.get("name")
-        cam_id = c.get("id") or name or ip  # Identificador único
+        nvr_password = c.get("nvr_password", "")
         
-        # Usar 4 pings com 2 retries para maior confiabilidade
-        reachable, avg_ms, loss, _out = ping_ip(ip, count=4, timeout_ms=1000, retry=2)
+        if not nvr_password:
+            # Se não tem senha NVR, reportar erro
+            cam_reports.append({
+                "name": name,
+                "ip": ip,
+                "status": "error",
+                "error": "NVR password not configured",
+                "stream_ok": False
+            })
+            continue
         
-        # Validação adicional: se latência muito alta (>500ms) em rede local, marcar como suspeito
-        suspicious = False
-        if reachable and avg_ms is not None and avg_ms > 500:
-            if ip.startswith(("192.168.", "10.", "172.")):
-                suspicious = True
-        
-        # Sistema de rastreamento por MAC address
-        mac_address = None
-        ip_changed = False
-        new_ip = None
-        
-        if mac_tracking_enabled:
-            # Se câmera está online, obter e cachear MAC address
-            if reachable:
-                mac_address = get_mac_address(ip)
-                if mac_address:
-                    # Atualizar cache
-                    if str(cam_id) not in mac_cache or mac_cache[str(cam_id)].get("mac") != mac_address:
-                        mac_cache[str(cam_id)] = {
-                            "mac": mac_address,
-                            "last_ip": ip,
-                            "last_seen": time.time()
-                        }
-                        mac_cache_updated = True
-                        print(f"[agent] Cached MAC {mac_address} for camera {name} ({ip})")
-            
-            # Se câmera está offline mas temos MAC em cache, tentar encontrar novo IP
-            elif not reachable and str(cam_id) in mac_cache:
-                cached_mac = mac_cache[str(cam_id)].get("mac")
-                if cached_mac:
-                    print(f"[agent] Camera {name} offline at {ip}, searching by MAC {cached_mac}...")
-                    
-                    # Extrair prefixo da rede do IP atual
-                    ip_parts = ip.split(".")
-                    if len(ip_parts) == 4:
-                        network_prefix = ".".join(ip_parts[:3]) + "."
-                        
-                        # Scan limitado (30 segundos max)
-                        new_ip = scan_network_for_mac(cached_mac, network_prefix, timeout_sec=30)
-                        
-                        if new_ip and new_ip != ip:
-                            print(f"[agent] Camera {name} found at new IP: {new_ip} (was {ip})")
-                            ip_changed = True
-                            
-                            # Re-testar no novo IP
-                            reachable, avg_ms, loss, _out = ping_ip(new_ip, count=4, timeout_ms=1000, retry=2)
-                            
-                            if reachable:
-                                # Atualizar cache com novo IP
-                                mac_cache[str(cam_id)]["last_ip"] = new_ip
-                                mac_cache[str(cam_id)]["last_seen"] = time.time()
-                                mac_cache_updated = True
-                                
-                                # Atualizar IP para o relatório
-                                ip = new_ip
+        # Testar stream RTSP via VLC
+        stream_ok, error_msg = test_camera_nvr_stream(ip, nvr_password, timeout_sec=10)
         
         cam_reports.append({
             "name": name,
             "ip": ip,
-            "status": "up" if reachable else "down",
-            "latency_ms": avg_ms,
-            "packet_loss": loss,
-            "suspicious": suspicious,
-            "mac_address": mac_address,
-            "ip_changed": ip_changed,
-            "old_ip": c.get("ip") if ip_changed else None
+            "status": "ok" if stream_ok else "error",
+            "stream_ok": stream_ok,
+            "error": error_msg,
+            "nvr_password": "***"  # Não enviar senha no relatório
         })
     
-    # Salvar cache de MAC atualizado
-    if mac_cache_updated:
-        state["camera_mac_cache"] = mac_cache
-        _save_state(state)
+    # Não precisa mais de cache de MAC para NVR
 
     # 4) Montar payload
     payload = {
