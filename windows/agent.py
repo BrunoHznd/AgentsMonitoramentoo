@@ -865,6 +865,7 @@ def run_once(cfg: Dict[str, Any]) -> None:
 
     # 1) Obter lista de câmeras do servidor (ou fallback para config local)
     conf = fetch_server_config(server, site, token)
+    print(f"[agent] Server config received: {conf}")
     cameras: List[Dict[str, Any]] = []
     speed_enabled = bool(cfg.get("speedtest"))
     # Aumentar tamanho padrão para melhor precisão (5MB download, 2MB upload)
