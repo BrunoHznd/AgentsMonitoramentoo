@@ -70,9 +70,10 @@ def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) ->
     
     # URL RTSP padrão para NVRs (ajustar conforme seu modelo)
     # Formatos comuns:
-    # rtsp://admin:senha@IP:554/cam/realmonitor?channel=1&subtype=0
-    # rtsp://admin:senha@IP:554/h264/ch1/main/av_stream
-    rtsp_url = f"rtsp://admin:{nvr_password}@{ip}:554/cam/realmonitor?channel=1&subtype=0"
+    # rtsp://admin:senha@IP:554/onvif1 (ONVIF - mais compatível)
+    # rtsp://admin:senha@IP:554/cam/realmonitor?channel=1&subtype=0 (Intelbras/Dahua)
+    # rtsp://admin:senha@IP:554/h264/ch1/main/av_stream (Hikvision)
+    rtsp_url = f"rtsp://admin:{nvr_password}@{ip}:554/onvif1"
     
     # Tentar com VLC (cvlc = VLC sem interface)
     # No Windows, VLC pode estar em caminhos específicos
@@ -98,6 +99,7 @@ def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) ->
     
     for cmd in vlc_commands:
         try:
+            print(f"[vlc] Trying command: {cmd[0]}")
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -106,6 +108,7 @@ def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) ->
             )
             
             output = (proc.stdout or "") + (proc.stderr or "")
+            print(f"[vlc] Return code: {proc.returncode}")
             
             # VLC retorna 0 se conseguiu abrir o stream
             # Verificar também por mensagens de erro conhecidas
@@ -121,21 +124,29 @@ def test_camera_nvr_stream(ip: str, nvr_password: str, timeout_sec: int = 10) ->
             has_error = any(_re.search(pattern, output, _re.IGNORECASE) for pattern in error_patterns)
             
             if proc.returncode == 0 and not has_error:
+                print(f"[vlc] SUCCESS: Stream accessible")
                 return True, None
             elif has_error:
                 # Extrair mensagem de erro
                 for line in output.splitlines():
                     for pattern in error_patterns:
                         if _re.search(pattern, line, _re.IGNORECASE):
+                            print(f"[vlc] ERROR detected: {line.strip()[:200]}")
                             return False, line.strip()[:200]
+                print(f"[vlc] ERROR: Stream error detected")
                 return False, "Stream error detected"
+            else:
+                print(f"[vlc] Non-zero return code but no error pattern matched, trying next command...")
             
         except subprocess.TimeoutExpired:
+            print(f"[vlc] TIMEOUT after {timeout_sec}s")
             return False, f"Timeout após {timeout_sec}s"
         except FileNotFoundError:
+            print(f"[vlc] Command not found: {cmd[0]}, trying next...")
             # VLC não encontrado, tentar próximo comando
             continue
         except Exception as e:
+            print(f"[vlc] EXCEPTION: {str(e)}")
             return False, f"Error: {str(e)}"
     
     # Se chegou aqui, VLC não está instalado
@@ -957,8 +968,12 @@ def run_once(cfg: Dict[str, Any]) -> None:
         name = c.get("name")
         nvr_password = c.get("nvr_password", "")
         
+        print(f"[agent] Testing camera: {name} ({ip})")
+        print(f"[agent] NVR password configured: {'Yes' if nvr_password else 'No'}")
+        
         if not nvr_password:
             # Se não tem senha NVR, reportar erro
+            print(f"[agent] ERROR: Camera {name} has no NVR password configured")
             cam_reports.append({
                 "name": name,
                 "ip": ip,
@@ -969,7 +984,13 @@ def run_once(cfg: Dict[str, Any]) -> None:
             continue
         
         # Testar stream RTSP via VLC
+        print(f"[agent] Testing RTSP stream for {name}...")
         stream_ok, error_msg = test_camera_nvr_stream(ip, nvr_password, timeout_sec=10)
+        
+        if stream_ok:
+            print(f"[agent] ✓ Camera {name} stream OK")
+        else:
+            print(f"[agent] ✗ Camera {name} stream FAILED: {error_msg}")
         
         cam_reports.append({
             "name": name,
