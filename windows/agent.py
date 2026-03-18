@@ -900,12 +900,20 @@ def run_once(cfg: Dict[str, Any]) -> None:
     if conf and isinstance(conf.get("cameras"), list):
         for c in conf["cameras"]:
             if isinstance(c, dict) and c.get("ip"):
-                cameras.append({"name": c.get("name"), "ip": c.get("ip")})
+                cameras.append({
+                    "name": c.get("name"), 
+                    "ip": c.get("ip"),
+                    "nvr_password": c.get("nvr_password")
+                })
     else:
         # fallback local
         for c in cfg.get("cameras", []):
             if isinstance(c, dict) and c.get("ip"):
-                cameras.append({"name": c.get("name"), "ip": c.get("ip")})
+                cameras.append({
+                    "name": c.get("name"), 
+                    "ip": c.get("ip"),
+                    "nvr_password": c.get("nvr_password")
+                })
 
     # 2) Testes de rede
     net = test_network()
